@@ -9,10 +9,9 @@ import json
 import numpy as np
 from decimal import Decimal
 import yfinance as yf  # For stock data
-import requests
-import calendar
+
 from forex_python.converter import CurrencyRates
-import pycountry
+import time  # Add this import
 import re
 import smtplib
 from email.mime.text import MIMEText
@@ -122,16 +121,20 @@ class UserSettings:
             
             if result and result[0]:
                 settings = json.loads(result[0])
-                # Ensure goals is stored as JSON string
-                if 'goals' in settings and not isinstance(settings['goals'], str):
-                    settings['goals'] = json.dumps(settings['goals'])
+                # Set default values if not present
+                settings.setdefault('currency', 'GHS')
+                settings.setdefault('theme', 'light')
+                settings.setdefault('notifications', {
+                    'email': True,
+                    'bill_reminders': True
+                })
                 return settings
             return self._default_settings()
         except Exception as e:
             st.error(f"Error loading settings: {str(e)}")
             return self._default_settings()
         
-    def save_settings(username, settings):
+    def save_settings(self, settings):
         try:
             # Ensure goals is JSON string before saving
             if 'goals' in settings and not isinstance(settings['goals'], str):
@@ -143,7 +146,7 @@ class UserSettings:
                 UPDATE users 
                 SET settings=? 
                 WHERE username=?
-            """, (json.dumps(settings), username))
+            """, (json.dumps(settings), self.username))
             conn.commit()
             conn.close()
             return True
@@ -246,7 +249,6 @@ class FinancialAnalyzer:
         }
 
 
-        
 # Enhanced Investment Analysis
 class InvestmentAnalyzer:
     def __init__(self, username):
@@ -492,7 +494,7 @@ class ReportGenerator:
               json.dumps(report_data)))
         conn.commit()
         conn.close()
-        
+
 # Add this to handle password reset
 def reset_password(token, new_password):
     conn = sqlite3.connect('financial_planner.db')
@@ -571,7 +573,7 @@ def validate_password(password):
         return False, "Password must contain at least one uppercase letter"
     if not re.search("[0-9]", password):
         return False, "Password must contain at least one number"
-    return True, "Password is valid"
+    return True, "Password is valid"    
 
 # Add session timeout
 def check_session_timeout():
@@ -581,12 +583,31 @@ def check_session_timeout():
             return True
     st.session_state.last_activity = datetime.now()
     return False
-    
+
 # Add interactive charts
 def create_spending_trend_chart(data):
-    fig = px.line(data, x='date', y='amount', 
+    # Convert date column to datetime if it's string
+    data['date'] = pd.to_datetime(data['date'])
+    
+    # Ensure amount is numeric
+    data['amount'] = pd.to_numeric(data['amount'], errors='coerce')
+    
+    # Group by date and category to get daily totals
+    spending_by_date = data.groupby(['date', 'category'])['amount'].sum().reset_index()
+    
+    # Create the line chart
+    fig = px.line(spending_by_date, 
+                  x='date', 
+                  y='amount',
                   color='category',
                   title='Spending Trends Over Time')
+    
+    # Customize layout
+    fig.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Amount ($)",
+        hovermode='x unified'
+    )
     return fig
 
 def create_portfolio_pie_chart(data):
@@ -602,7 +623,7 @@ def export_data(data, format='csv'):
     elif format == 'pdf':
         # Implement PDF export
         pass
-    
+
 # In the "Budget Tracking" section
 def check_budget_alerts(username):
     conn = sqlite3.connect('financial_planner.db')
@@ -651,7 +672,7 @@ def convert_currency(amount, from_currency, to_currency):
     except Exception as e:
         st.error(f"Currency conversion error: {str(e)}")
         return amount
-    
+
 def backup_database():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     backup_file = f'backup_{timestamp}.db'
@@ -674,7 +695,7 @@ def manage_categories():
                   PRIMARY KEY (username, category_name))''')
     conn.commit()
     conn.close()
-    
+
 def get_spending_data(username):
     try:
         conn = sqlite3.connect('financial_planner.db')
@@ -691,17 +712,149 @@ def get_spending_data(username):
     finally:
         if 'conn' in locals():
             conn.close()
+            
+def get_currency_symbol(currency_code):
+    currency_symbols = {
+        "USD": "$",
+        "EUR": "€",
+        "GBP": "£",
+        "JPY": "¥",
+        "GHS": "₵"
+    }
+    return currency_symbols.get(currency_code, currency_code)
 
+def convert_amount(amount, from_currency, to_currency):
+    if from_currency == to_currency:
+        return amount
+    try:
+        c = CurrencyRates()
+        rate = c.get_rate(from_currency, to_currency)
+        return amount * rate
+    except Exception as e:
+        st.warning(f"Could not convert currency: {e}")
+        return amount
 
+def get_theme_colors():
+    return {
+        "light": {
+            "background": "#FFFFFF",
+            "text": "#000000",
+            "sidebar_bg": "#F0F2F6",
+            "sidebar_text": "#111111",
+            "accent": "#FF4B4B",
+            "secondary": "#F0F2F6",
+            "success": "#00C853",
+            "warning": "#FFA726",
+            "error": "#FF4B4B",
+            "info": "#2196F3",
+            "card_bg": "#FFFFFF",
+            "card_border": "#E0E0E0",
+            "input_bg": "#FFFFFF",
+            "input_text": "#000000",
+            "input_border": "#E0E0E0",
+            "hover": "#F5F5F5"
+        },
+        "dark": {
+            "background": "#262730",
+            "text": "#FFFFFF",
+            "sidebar_bg": "#1E1E1E",
+            "sidebar_text": "#FFFFFF",
+            "accent": "#FF4B4B",
+            "secondary": "#3B3B3B",
+            "success": "#4CAF50",
+            "warning": "#FFA726",
+            "error": "#FF5252",
+            "info": "#2196F3",
+            "card_bg": "#1E1E1E",
+            "card_border": "#333333",
+            "input_bg": "#333333",
+            "input_text": "#FFFFFF",
+            "input_border": "#444444",
+            "hover": "#363636"
+        },
+        "blue": {
+            "background": "#1E3D59",
+            "text": "#FFFFFF",
+            "sidebar_bg": "#152D43",
+            "sidebar_text": "#E0E0E0",
+            "accent": "#17C3B2",
+            "secondary": "#2B5876",
+            "success": "#00BFA5",
+            "warning": "#FFD54F",
+            "error": "#FF5252",
+            "info": "#40C4FF",
+            "card_bg": "#234B6E",
+            "card_border": "#1A364F",
+            "input_bg": "#2B5876",
+            "input_text": "#FFFFFF",
+            "input_border": "#17C3B2",
+            "hover": "#2B5876"
+        },
+        "green": {
+            "background": "#2C5530",
+            "text": "#FFFFFF",
+            "sidebar_bg": "#1E3B22",
+            "sidebar_text": "#E0E0E0",
+            "accent": "#8BC34A",
+            "secondary": "#3E7B45",
+            "success": "#66BB6A",
+            "warning": "#FDD835",
+            "error": "#FF5252",
+            "info": "#29B6F6",
+            "card_bg": "#2F5934",
+            "card_border": "#1E3B22",
+            "input_bg": "#3E7B45",
+            "input_text": "#FFFFFF",
+            "input_border": "#8BC34A",
+            "hover": "#3E7B45"
+        },
+        "purple": {
+            "background": "#46344E",
+            "text": "#FFFFFF",
+            "sidebar_bg": "#2A1F2F",
+            "sidebar_text": "#E0E0E0",
+            "accent": "#9C27B0",
+            "secondary": "#5D4266",
+            "success": "#7CB342",
+            "warning": "#FFB300",
+            "error": "#FF5252",
+            "info": "#29B6F6",
+            "card_bg": "#533A5A",
+            "card_border": "#2A1F2F",
+            "input_bg": "#5D4266",
+            "input_text": "#FFFFFF",
+            "input_border": "#9C27B0",
+            "hover": "#5D4266"
+        },
+        "pink": {
+            "background": "#FFE4E1",  # Misty Rose
+            "text": "#4A4A4A",        # Dark Gray
+            "sidebar_bg": "#FFB6C1",  # Light Pink
+            "sidebar_text": "#4A4A4A", # Dark Gray
+            "accent": "#FF69B4",      # Hot Pink
+            "secondary": "#FFC0CB",    # Pink
+            "success": "#66BB6A",
+            "warning": "#FFA726",
+            "error": "#FF4081",
+            "info": "#29B6F6",
+            "card_bg": "#FFF0F5",     # Lavender Blush
+            "card_border": "#FFB6C1",
+            "input_bg": "#FFFFFF",
+            "input_text": "#4A4A4A",
+            "input_border": "#FF69B4",
+            "hover": "#FFC0CB"
+        }
+    }
+    
 
-
+            
+            
 
 
 # Enhanced Streamlit Interface
 def main():
     st.set_page_config(page_title="Financial Life Planner", layout="wide")
     init_db()
-    
 
     # Initialize session state variables
     if "authenticated" not in st.session_state:
@@ -710,29 +863,231 @@ def main():
         st.session_state.username = None
     if "last_activity" not in st.session_state:
         st.session_state.last_activity = datetime.now()
+    if "currency" not in st.session_state:
+        st.session_state.currency = "GHS"  # Default currency
+        
+    # Initialize user settings if authenticated
+    if st.session_state.authenticated:
+        user_settings = UserSettings(st.session_state.username)
 
     # Then continue with the session timeout check
     if st.session_state.authenticated:
         if check_session_timeout():
             st.warning("Session expired. Please login again.")
             st.rerun()
-    
-     # Initialize session state
+
+            # Set currency symbol globally
+        st.session_state.currency = user_settings.settings.get('currency', 'GHS')
+
+        # Initialize theme and settings
+        theme = "light"  # Default theme
+        theme_colors = get_theme_colors()    
+        
+        # Initialize session state
     if "username" not in st.session_state:
         st.session_state.username = None
         st.session_state.authenticated = False
+
+    # Apply theme and other global settings
+    if st.session_state.authenticated:
+        user_settings = UserSettings(st.session_state.username)
+        theme = user_settings.settings.get('theme', 'light')
+        theme_colors = get_theme_colors()
         
-    
+        if theme in theme_colors:
+            colors = theme_colors[theme]
+            st.markdown(f"""
+                <style>
+                    /* Main App and Background */
+                    .stApp {{
+                        background-color: {colors['background']};
+                        color: {colors['text']};
+                    }}
+                    
+                    /* Sidebar Styling */
+                    [data-testid="stSidebar"] {{
+                        background-color: {colors['sidebar_bg']} !important;
+                        color: {colors['sidebar_text']};
+                        border-right: 1px solid {colors['card_border']};
+                    }}
+                    
+                    [data-testid="stSidebar"] [data-testid="stMarkdown"] p {{
+                        color: {colors['sidebar_text']} !important;
+                    }}
+                    
+                    /* Navigation Radio Buttons */
+                    .st-emotion-cache-1gulkj5 {{
+                        background-color: {colors['sidebar_bg']};
+                        color: {colors['sidebar_text']};
+                        padding: 0.8rem;
+                        border-radius: 0.5rem;
+                        margin: 0.3rem 0;
+                        border: 1px solid {colors['card_border']};
+                        transition: all 0.3s ease;
+                    }}
+                    
+                    .st-emotion-cache-1gulkj5:hover {{
+                        background-color: {colors['hover']};
+                        border-color: {colors['accent']};
+                    }}
+                    
+                    /* Text and Labels */
+                    label, .st-emotion-cache-10trblm, .st-emotion-cache-16idsys p {{
+                        color: {colors['text']} !important;
+                    }}
+                    
+                    /* Form Elements with Enhanced Styling */
+                    .stTextInput > div > div > input,
+                    .stNumberInput > div > div > input,
+                    .stDateInput > div > div > input,
+                    .stTextArea > div > div > textarea {{
+                        background-color: {colors['input_bg']};
+                        color: {colors['input_text']};
+                        border: 1px solid {colors['input_border']};
+                        border-radius: 0.375rem;
+                        padding: 0.5rem;
+                    }}
+                    
+                    /* Selectbox Enhancement */
+                    .stSelectbox > div > div > select {{
+                        background-color: {colors['input_bg']};
+                        color: {colors['input_text']};
+                        border: 1px solid {colors['input_border']};
+                        border-radius: 0.375rem;
+                    }}
+                    
+                    /* Button Styling */
+                    .stButton > button {{
+                        background-color: {colors['accent']};
+                        color: white;
+                        border: none;
+                        border-radius: 0.375rem;
+                        padding: 0.5rem 1rem;
+                        transition: all 0.3s ease;
+                    }}
+                    
+                    .stButton > button:hover {{
+                        background-color: {colors['hover']};
+                        transform: translateY(-1px);
+                    }}
+                    
+                    /* Metrics Enhancement */
+                    [data-testid="stMetricValue"] {{
+                        color: {colors['text']};
+                        background-color: {colors['card_bg']};
+                        padding: 1rem;
+                        border-radius: 0.5rem;
+                        border: 1px solid {colors['card_border']};
+                    }}
+                    
+                    /* Alert Styling */
+                    .stAlert {{
+                        background-color: {colors['card_bg']};
+                        color: {colors['text']};
+                        border: 1px solid {colors['card_border']};
+                        border-radius: 0.5rem;
+                        padding: 1rem;
+                    }}
+                    
+                    .stSuccess {{
+                        border-left: 4px solid {colors['success']};
+                    }}
+                    
+                    .stError {{
+                        border-left: 4px solid {colors['error']};
+                    }}
+                    
+                    .stWarning {{
+                        border-left: 4px solid {colors['warning']};
+                    }}
+                    
+                    .stInfo {{
+                        border-left: 4px solid {colors['info']};
+                    }}
+                    
+                    /* DataFrames and Tables */
+                    .stDataFrame {{
+                        background-color: {colors['card_bg']};
+                        border: 1px solid {colors['card_border']};
+                        border-radius: 0.5rem;
+                        padding: 0.5rem;
+                    }}
+                    
+                    /* Expander Enhancement */
+                    .streamlit-expanderHeader {{
+                        background-color: {colors['card_bg']};
+                        color: {colors['text']};
+                        border: 1px solid {colors['card_border']};
+                        border-radius: 0.5rem;
+                    }}
+                    
+                    /* Progress Bars */
+                    .stProgress > div > div > div > div {{
+                        background-color: {colors['accent']};
+                        border-radius: 1rem;
+                    }}
+                    
+                    /* Tooltips */
+                    .stTooltipIcon {{
+                        color: {colors['text']};
+                    }}
+                    
+                    /* Tabs Enhancement */
+                    .stTabs [data-baseweb="tab-list"] {{
+                        background-color: {colors['card_bg']};
+                        border-radius: 0.5rem;
+                        padding: 0.5rem;
+                    }}
+                    
+                    .stTabs [data-baseweb="tab"] {{
+                        color: {colors['text']};
+                        border: 1px solid {colors['card_border']};
+                        border-radius: 0.375rem;
+                    }}
+                    
+                    /* Radio and Checkbox */
+                    .stRadio > label,
+                    .stCheckbox > label {{
+                        color: {colors['text']} !important;
+                    }}
+                    
+                    /* File Uploader */
+                    .stFileUploader {{
+                        background-color: {colors['card_bg']};
+                        color: {colors['text']};
+                        border: 1px solid {colors['card_border']};
+                        border-radius: 0.5rem;
+                        padding: 1rem;
+                    }}
+                    
+                    /* Charts and Plots */
+                    .js-plotly-plot {{
+                        background-color: {colors['background']};
+                    }}
+                    
+                    /* Slider Enhancement */
+                    .stSlider > div > div {{
+                        background-color: {colors['card_bg']};
+                    }}
+                    
+                    .stSlider > div > div > div > div {{
+                        background-color: {colors['accent']};
+                    }}
+                </style>
+            """, unsafe_allow_html=True) 
+
+        # Set currency symbol globally
+        st.session_state.currency = user_settings.settings.get('currency', 'GHS')    
 
     # Login/Registration Section
     if not st.session_state.authenticated:
         col1, col2 = st.columns(2)
-        
+
         with col1:
             st.subheader("Login")
             login_username = st.text_input("Username", key="login_username")
             login_password = st.text_input("Password", type="password", key="login_password")
-           
+
             # Add forgot password expander
             with st.expander("Forgot Password?"):
                 forgot_username = st.text_input("Enter your username", key="forgot_username")
@@ -746,13 +1101,13 @@ def main():
                     """, (forgot_username, forgot_email))
                     result = c.fetchone()
                     conn.close()
-                    
+
                     if result:
                         # Generate reset token (valid for 1 hour)
                         reset_token = hashlib.sha256(
                             f"{forgot_username}{datetime.now().strftime('%Y-%m-%d-%H')}".encode()
                         ).hexdigest()
-                        
+
                         # Store reset token in database
                         conn = sqlite3.connect('financial_planner.db')
                         c = conn.cursor()
@@ -765,10 +1120,10 @@ def main():
                             forgot_username))
                         conn.commit()
                         conn.close()
-                        
+
                         # Create reset link
                         reset_link = f"http://yourdomain.com/reset_password?token={reset_token}"
-                        
+
                         # Here you would typically send an email with the reset link
                         # For demonstration, we'll show the link in the app
                         st.success("Password reset link has been generated!")
@@ -776,29 +1131,28 @@ def main():
                         st.info("In a production environment, this link would be sent to your email.")
                     else:
                         st.error("Username and email combination not found.")
-            
-                    
+
             if st.button("Login"):
                 conn = sqlite3.connect('financial_planner.db')
                 c = conn.cursor()
                 c.execute("SELECT password FROM users WHERE username=?", (login_username,))
                 result = c.fetchone()
                 conn.close()
-                
+
                 if result and result[0] == hashlib.sha256(login_password.encode()).hexdigest():
                     st.session_state.username = login_username
                     st.session_state.authenticated = True
                     st.rerun()  # Changed from experimental_rerun to rerun
                 else:
                     st.error("Invalid username or password")
-        
+
         with col2:
             st.subheader("Register")
             reg_username = st.text_input("Username", key="reg_username")
             reg_password = st.text_input("Password", type="password", key="reg_password")
             reg_email = st.text_input("Email")
-            
-# In the registration section
+
+            # In the registration section
             if st.button("Register"):
                 if not reg_username or not reg_password or not reg_email:
                     st.error("Please fill in all fields")
@@ -825,12 +1179,12 @@ def main():
     else:
         # Authenticated user interface
         st.sidebar.title(f"Welcome, {st.session_state.username}")
-        
+
         if st.sidebar.button("Logout"):
             st.session_state.username = None
             st.session_state.authenticated = False
             st.rerun()
-        
+
         # Initialize managers and analyzers
         user_settings = UserSettings(st.session_state.username)
         financial_analyzer = FinancialAnalyzer(st.session_state.username)
@@ -838,69 +1192,84 @@ def main():
         debt_manager = DebtManager(st.session_state.username)
         bill_manager = BillManager(st.session_state.username)
         report_generator = ReportGenerator(st.session_state.username)
-        
-        # Navigation
-        page = st.sidebar.radio("Navigation", 
-                              ["Dashboard", "Budget Planner", "Transactions","Budget Tracking", 
-                               "Goals", "Investments", "Debt Management",
-                               "Bills & Subscriptions", "Reports & Analysis",
-                               "Settings"])
-        
+
+        # Navigation with custom styling
+        page = st.sidebar.radio(
+            "Navigation",
+            ["Dashboard", "Budget Planner", "Transactions", "Budget Tracking",
+            "Goals", "Investments", "Debt Management",
+            "Bills & Subscriptions", "Reports & Analysis", "Settings"],
+            key="navigation",
+            format_func=lambda x: f"  {x}"  # Add spacing for better appearance
+        )
+
         if page == "Dashboard":
             st.header("Financial Dashboard")
             
+            # In the Dashboard section
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             # Add this to display alerts
             alerts = check_budget_alerts(st.session_state.username)
             if alerts:
                 st.subheader("Budget Alerts")
                 for alert in alerts:
                     st.warning(alert)
-            
+
             # Quick metrics
             col1, col2, col3, col4 = st.columns(4)
+            # In the Dashboard section
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             with col1:
                 net_worth = financial_analyzer.calculate_net_worth()
-                st.metric("Net Worth", f"${net_worth:,.2f}")
-            
+                st.metric("Net Worth", f"{currency_symbol}{net_worth:,.2f}")
+
             with col2:
                 portfolio = investment_analyzer.get_portfolio_performance()
                 if portfolio:
-                    st.metric("Portfolio Value", f"${portfolio['total_value']:,.2f}",
-                             f"{portfolio['portfolio_return']*100:.1f}%")
-            
+                    st.metric("Portfolio Value", f"{currency_symbol}{portfolio['total_value']:,.2f}",
+                            f"{portfolio['portfolio_return']*100:.1f}%")
+
             with col3:
                 upcoming_bills = bill_manager.get_upcoming_bills(7)
                 if not upcoming_bills.empty:
-                    st.metric("Upcoming Bills", f"${upcoming_bills['amount'].sum():,.2f}")
+                    st.metric("Upcoming Bills", f"{currency_symbol}{upcoming_bills['amount'].sum():,.2f}")
                 else:
-                    st.metric("Upcoming Bills", "$0.00")
-            
+                    st.metric("Upcoming Bills", f"{currency_symbol}0.00")
+
             with col4:
                 savings_data = financial_analyzer.analyze_spending_patterns()
                 if savings_data:
                     savings_amount = savings_data['monthly_savings']
                     st.metric("Savings This Month", 
-                            f"${savings_amount:,.2f}",
+                            f"{currency_symbol}{savings_amount:,.2f}",
                             delta="Income exceeds expenses" if savings_amount > 0 else "Overspending detected")
                 else:
-                    st.metric("Savings This Month", "$0.00")
+                    st.metric("Savings This Month", f"{currency_symbol}0.00")
 
             # Establish connection before using it
             conn = sqlite3.connect('financial_planner.db')
             spending_data = pd.read_sql_query("""
                 SELECT date, category, amount 
                 FROM transactions 
-                WHERE username=? AND transaction_type='Expense'
+                WHERE username=? 
+                AND transaction_type='Expense'
+                AND date >= date('now', '-30 days')
                 ORDER BY date
             """, conn, params=(st.session_state.username,))
+            conn.close()
 
             if not spending_data.empty:
-                st.plotly_chart(create_spending_trend_chart(spending_data))
+                st.plotly_chart(create_spending_trend_chart(spending_data), use_container_width=True)
+            else:
+                st.info("No transaction data available for the chart. Add some transactions to see spending trends.")
 
             # Make sure to close the connection after use
             conn.close()
 
-            
             # Display recent transactions
             st.subheader("Recent Transactions")
             conn = sqlite3.connect('financial_planner.db')
@@ -911,21 +1280,25 @@ def main():
                 ORDER BY date DESC LIMIT 10
             """, conn, params=(st.session_state.username,))
             conn.close()
-            
+
             if not transactions.empty:
                 st.dataframe(transactions, use_container_width=True)
             else:
                 st.write("No transactions to display.")
-        
+
         elif page == "Budget Planner":
             st.header("Budget Planner")
-    
+            
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             # Income Section
             st.subheader("Monthly Income")
             income_sources = ["Salary", "Investments", "Side Business", "Other"]
             income = {}
             total_income = 0
-            
+
             for source in income_sources:
                 current_income = user_settings.settings.get('income', {}).get(source, 0.0)
                 income[source] = st.number_input(f"{source} Income", 
@@ -933,16 +1306,16 @@ def main():
                                             value=float(current_income),
                                             step=100.0)
                 total_income += income[source]
-            
-            st.metric("Total Monthly Income", f"${total_income:,.2f}")
-            
+
+            st.metric("Total Monthly Income", f"{currency_symbol}{total_income:,.2f}")
+
             # Expense Budget Section
             st.subheader("Monthly Expenses Budget")
             categories = ["Housing", "Utilities", "Food", "Transportation", 
                         "Entertainment", "Savings", "Insurance", "Others"]
             budget = {}
             total_budget = 0
-            
+
             for category in categories:
                 current_budget = user_settings.settings.get('budget', {}).get(category, 0.0)
                 budget[category] = st.number_input(f"{category} Budget", 
@@ -950,18 +1323,18 @@ def main():
                                                 value=float(current_budget),
                                                 step=10.0)
                 total_budget += budget[category]
-            
-            st.metric("Total Monthly Budget", f"${total_budget:,.2f}")
-            
+
+            st.metric("Total Monthly Budget", f"{currency_symbol}{total_budget:,.2f}")
+
             # Budget Summary
             st.subheader("Budget Summary")
             remaining = total_income - total_budget
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("Monthly Surplus/Deficit", 
-                        f"${remaining:,.2f}",
+                        f"{currency_symbol}{remaining:,.2f}",
                         delta=f"{(remaining/total_income)*100:.1f}% of income" if total_income > 0 else "0%")
-            
+
             if st.button("Save Budget"):
                 user_settings.settings['income'] = income
                 user_settings.settings['budget'] = budget
@@ -976,18 +1349,22 @@ def main():
                 conn.close()
                 st.success("Budget saved successfully!")
 
-    # Add other pages as needed...
+        # Add other pages as needed...
         elif page == "Transactions":
             st.header("Transaction Management")
-            
+
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             # Add New Transaction
             st.subheader("Add New Transaction")
-            
+
             # Transaction Type Selection
             transaction_type = st.radio("Transaction Type", ["Expense", "Income"])
-            
+
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 transaction_date = st.date_input("Date", value=datetime.now())
                 # Modify categories based on transaction type
@@ -1000,16 +1377,16 @@ def main():
                         ["Salary", "Investments", "Business", "Freelance", 
                         "Rental", "Other Income"])
                 transaction_amount = st.number_input("Amount", min_value=0.0, step=10.0)
-            
+
             with col2:
                 transaction_subcategory = st.text_input("Subcategory (optional)")
                 transaction_description = st.text_input("Description")
                 payment_method = st.selectbox("Payment Method", 
                     ["Cash", "Credit Card", "Debit Card", "Bank Transfer", "Other"])
-            
+
             recurring = st.checkbox("Recurring Transaction")
             tags = st.text_input("Tags (comma-separated)")
-            
+
             if st.button("Add Transaction"):
                 try:
                     conn = sqlite3.connect('financial_planner.db')
@@ -1028,10 +1405,9 @@ def main():
                 except Exception as e:
                     st.error(f"Error adding transaction: {str(e)}")
 
-            
             # Transaction History
             st.subheader("Transaction History")
-            
+
             # Filters
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -1049,7 +1425,7 @@ def main():
             with col4:
                 sort_order = st.selectbox("Sort by", ["Date (Latest)", "Date (Oldest)", 
                                                     "Amount (Highest)", "Amount (Lowest)"])
-            
+
             query = """
                 SELECT date, transaction_type, category, subcategory, amount, description, 
                 payment_method, tags
@@ -1072,7 +1448,6 @@ def main():
             transactions = pd.read_sql_query(query, conn, params=params)
             conn.close()
 
-            
             if not transactions.empty:
                 st.subheader("Transaction List")
                 for index, row in transactions.iterrows():
@@ -1084,7 +1459,7 @@ def main():
                     with col3:
                         st.write(f"Category: {row['category']}")
                     with col4:
-                        st.write(f"Amount: ${abs(row['amount']):,.2f}")
+                        st.write(f"Amount: {currency_symbol}{abs(row['amount']):,.2f}")
                     with col5:
                         if st.button("Delete", key=f"del_trans_{index}"):
                             try:
@@ -1102,10 +1477,13 @@ def main():
                             except Exception as e:
                                 st.error(f"Error deleting transaction: {str(e)}")
 
-            
         elif page == "Budget Tracking":
             st.header("Budget Tracking")
             
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             # Get current month's transactions
             conn = sqlite3.connect('financial_planner.db')
             current_month = datetime.now().strftime('%Y-%m')
@@ -1115,17 +1493,17 @@ def main():
                     WHERE username=? AND strftime('%Y-%m', date)=?
                     GROUP BY category
                 """, conn, params=(st.session_state.username, current_month))
-        
+
             # Get budget data
             budget_data = user_settings.settings.get('budget', {})
-            
+
             # Create comparison dataframe
             budget_comparison = pd.DataFrame(list(budget_data.items()), columns=['category', 'budget'])
             budget_comparison = budget_comparison.merge(transactions, on='category', how='left')
             budget_comparison['spent'] = budget_comparison['spent'].fillna(0)
             budget_comparison['remaining'] = budget_comparison['budget'] - budget_comparison['spent']
             budget_comparison['percentage'] = (budget_comparison['spent'] / budget_comparison['budget'] * 100).round(1)
-        
+
             # Display budget progress
             for _, row in budget_comparison.iterrows():
                 col1, col2 = st.columns([3, 1])
@@ -1134,24 +1512,28 @@ def main():
                     progress = max(0, min(100, abs(row['percentage']))) / 100
                     st.progress(progress)
                 with col2:
-                    st.write(f"{row['category']}: ${abs(row['spent']):,.2f} / ${row['budget']:,.2f}")
+                    st.write(f"{row['category']}: {currency_symbol}{abs(row['spent']):,.2f} / ${row['budget']:,.2f}")
 
         elif page == "Goals":
             st.header("Financial Goals")
             
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             try:
                 # Ensure goals are properly loaded as JSON
                 goals_str = user_settings.settings.get('goals', '[]')
                 if not isinstance(goals_str, str):
                     goals_str = '[]'
                 goals = json.loads(goals_str)
-                
+
                 # Add new goal
                 st.subheader("Add New Goal")
                 goal_name = st.text_input("Goal Name")
                 goal_amount = st.number_input("Target Amount", min_value=0.0, step=100.0)
                 goal_deadline = st.date_input("Target Date")
-                
+
                 if st.button("Add Goal"):
                     if goal_name and goal_amount > 0:  # Basic validation
                         new_goal = {
@@ -1160,16 +1542,16 @@ def main():
                             "deadline": goal_deadline.strftime("%Y-%m-%d"),
                             "created_date": datetime.now().strftime("%Y-%m-%d")
                         }
-                        
+
                         # Initialize goals list if empty
                         if not isinstance(goals, list):
                             goals = []
-                        
+
                         goals.append(new_goal)
-                        
+
                         # Update settings with new goals
                         user_settings.settings['goals'] = json.dumps(goals)
-                        
+
                         # Save to database using the save_settings method
                         if user_settings.save_settings(st.session_state.username, user_settings.settings):
                             st.success("Goal added successfully!")
@@ -1177,7 +1559,7 @@ def main():
                             st.error("Failed to save goal")
                     else:
                         st.warning("Please enter a goal name and amount greater than 0")
-                
+
                 # Display existing goals
                 if goals and isinstance(goals, list):
                     st.subheader("Your Goals")
@@ -1187,13 +1569,13 @@ def main():
                             with col1:
                                 st.write(f"**{goal.get('name', 'Unnamed Goal')}**")
                             with col2:
-                                st.write(f"Target: ${float(goal.get('amount', 0)):,.2f}")
+                                st.write(f"Target: {currency_symbol}{float(goal.get('amount', 0)):,.2f}")
                             with col3:
                                 st.write(f"Deadline: {goal.get('deadline', 'No deadline')}")
                         except (KeyError, ValueError, TypeError) as e:
                             st.error(f"Error displaying goal {i+1}: {str(e)}")
                             continue
-                
+
             except json.JSONDecodeError as e:
                 st.error(f"Error loading goals: {str(e)}")
                 user_settings.settings['goals'] = '[]'
@@ -1201,7 +1583,7 @@ def main():
                     st.info("Goals have been reset. Please try adding a new goal.")
             except Exception as e:
                 st.error(f"Unexpected error: {str(e)}")
-                
+
                 if goals and isinstance(goals, list):
                     st.subheader("Your Goals")
                     for i, goal in enumerate(goals):
@@ -1216,37 +1598,41 @@ def main():
                             if st.button("Delete", key=f"del_goal_{i}"):
                                 try:
                                     goals.pop(i)
+                                    # Update settings with new goals
                                     user_settings.settings['goals'] = json.dumps(goals)
-                                    if user_settings.save_settings(st.session_state.username, 
-                                                                user_settings.settings):
-                                        st.success("Goal deleted!")
-                                        st.rerun()
+
+                                    # Save to database using the save_settings method
+                                    if user_settings.save_settings(user_settings.settings):
+                                        st.success("Goal added successfully!")
                                     else:
-                                        st.error("Failed to delete goal")
+                                        st.error("Failed to save goal")
                                 except Exception as e:
                                     st.error(f"Error deleting goal: {str(e)}")       
-    
 
         elif page == "Investments":
             st.header("Investment Portfolio")
+            
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
 
             # Portfolio Summary
             portfolio = investment_analyzer.get_portfolio_performance()
             if portfolio:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Total Value", f"${portfolio['total_value']:,.2f}")
+                    st.metric("Total Value", f"{currency_symbol}{portfolio['total_value']:,.2f}")
                 with col2:
                     st.metric("Return", f"{portfolio['portfolio_return']*100:.1f}%")
                 with col3:
                     st.metric("Risk (Std Dev)", f"{portfolio['portfolio_risk']*100:.1f}%")
-            
+
             # Investment Type Selection
             investment_type = st.selectbox(
                 "Investment Type",
                 ["Stocks", "Company Shares", "Treasury Bills", "Bonds"]
             )
-            
+
             if investment_type == "Stocks":
                 st.subheader("Add Stock Investment")
                 symbol = st.text_input("Stock Symbol").upper()
@@ -1255,7 +1641,7 @@ def main():
                         ticker = yf.Ticker(symbol)
                         current_price = ticker.history(period='1d')['Close'].iloc[-1]
                         st.write(f"Current Price: ${current_price:.2f}")
-                        
+
                         quantity = st.number_input("Quantity", min_value=0.0, step=1.0)
                         if st.button("Add Stock"):
                             conn = sqlite3.connect('financial_planner.db')
@@ -1278,7 +1664,7 @@ def main():
                 share_price = st.number_input("Share Price", min_value=0.0, step=1.0)
                 quantity = st.number_input("Number of Shares", min_value=0.0, step=1.0)
                 profitability = st.number_input("Annual Profitability (%)", min_value=-100.0, max_value=1000.0, step=0.1)
-                
+
                 if st.button("Add Company Shares"):
                     try:
                         conn = sqlite3.connect('financial_planner.db')
@@ -1301,7 +1687,7 @@ def main():
                 amount = st.number_input("Investment Amount", min_value=0.0, step=100.0)
                 interest_rate = st.number_input("Interest Rate (%)", min_value=0.0, max_value=100.0, step=0.1)
                 maturity_date = st.date_input("Maturity Date")
-                
+
                 if st.button("Add Treasury Bill"):
                     try:
                         conn = sqlite3.connect('financial_planner.db')
@@ -1325,7 +1711,7 @@ def main():
                 principal = st.number_input("Principal Amount", min_value=0.0, step=100.0)
                 coupon_rate = st.number_input("Coupon Rate (%)", min_value=0.0, max_value=100.0, step=0.1)
                 maturity_years = st.number_input("Years to Maturity", min_value=1, max_value=30, step=1)
-                
+
                 if st.button("Add Bond"):
                     try:
                         conn = sqlite3.connect('financial_planner.db')
@@ -1358,7 +1744,7 @@ def main():
                 st.dataframe(portfolio_df, use_container_width=True)
             else:
                 st.write("No investments in portfolio yet.")
-                
+
             if not portfolio_df.empty:
                 st.subheader("Current Portfolio")
                 for index, row in portfolio_df.iterrows():
@@ -1368,9 +1754,9 @@ def main():
                     with col2:
                         st.write(f"Quantity: {row['quantity']}")
                     with col3:
-                        st.write(f"Purchase Price: ${row['purchase_price']:,.2f}")
+                        st.write(f"Purchase Price: {currency_symbol}{row['purchase_price']:,.2f}")
                     with col4:
-                        st.write(f"Total Value: ${row['Total Value']:,.2f}")
+                        st.write(f"Total Value: {currency_symbol}{row['Total Value']:,.2f}")
                     with col5:
                         if st.button("Delete", key=f"del_inv_{index}"):
                             try:
@@ -1388,16 +1774,19 @@ def main():
                             except Exception as e:
                                 st.error(f"Error deleting investment: {str(e)}")              
 
-
         elif page == "Debt Management":
             st.header("Debt Management")
+            
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
 
             # Add New Debt
             st.subheader("Add New Debt")
             debt_name = st.text_input("Debt Name")
             debt_amount = st.number_input("Amount", min_value=0.0, step=100.0)
             interest_rate = st.number_input("Interest Rate (%)", min_value=0.0, max_value=100.0, step=0.1)
-            
+
             if st.button("Add Debt"):
                 conn = sqlite3.connect('financial_planner.db')
                 c = conn.cursor()
@@ -1414,18 +1803,18 @@ def main():
                     st.error(f"Error adding debt: {e}")
                 finally:
                     conn.close()
-            
+
             # Debt Analysis
             debt_analysis = debt_manager.analyze_debt()
             if debt_analysis:
                 st.subheader("Debt Overview")
-                st.metric("Total Debt", f"${debt_analysis['total_debt']:,.2f}")
+                st.metric("Total Debt", f"{currency_symbol}{debt_analysis['total_debt']:,.2f}")
                 if debt_analysis['average_interest'] is not None:
                     st.metric("Average Interest Rate", f"{debt_analysis['average_interest']:.1f}%")
 
         elif page == "Bills & Subscriptions":
             st.header("Bills & Subscriptions")
-        
+
             # Add New Bill
             st.subheader("Add New Bill")
             bill_name = st.text_input("Bill Name")
@@ -1433,7 +1822,7 @@ def main():
             due_date = st.date_input("Due Date")
             frequency = st.selectbox("Frequency", ["Monthly", "Weekly", "Yearly"])
             reminder = st.number_input("Reminder (days before)", min_value=0, max_value=30)
-            
+
             if st.button("Add Bill"):
                 conn = sqlite3.connect('financial_planner.db')
                 c = conn.cursor()
@@ -1445,40 +1834,45 @@ def main():
                 conn.commit()
                 conn.close()
                 st.success("Bill added successfully!")
-            
+
             # Display Upcoming Bills
             st.subheader("Upcoming Bills")
             upcoming = bill_manager.get_upcoming_bills()
             if not upcoming.empty:
+                upcoming['amount'] = upcoming['amount'].apply(lambda x: f"{currency_symbol}{x:,.2f}")
                 st.dataframe(upcoming[['name', 'amount', 'due_date', 'frequency']])
 
         elif page == "Reports & Analysis":
             st.header("Financial Reports & Analysis")
-        
+            
+            # Get currency symbol at the start of the page
+            currency = user_settings.settings.get('currency', 'GHS')
+            currency_symbol = get_currency_symbol(currency)
+
             # Generate Report
             report_type = st.selectbox("Report Type", ["Monthly", "Quarterly", "Annual"])
             if st.button("Generate Report"):
                 with st.spinner("Generating report..."):
                     report = report_generator.generate_monthly_report()
-                    
+
                     # Display report sections
                     if report['income_expense']:
                         st.subheader("Income vs Expenses")
                         st.write(report['income_expense'])
-                    
+
                     if report['budget_performance']:
                         st.subheader("Budget Performance")
                         st.write(report['budget_performance'])
-                    
+
                     if report['investment_performance']:
                         st.subheader("Investment Performance")
                         st.write(report['investment_performance'])
-                    
+
                     if report['recommendations']:
                         st.subheader("Recommendations")
                         for rec in report['recommendations']:
                             st.write(f"• {rec}")
-                            
+
             # In the "Reports & Analysis" section
             st.subheader("Export Data")
             export_format = st.selectbox("Export Format", ["CSV", "Excel"])
@@ -1490,7 +1884,7 @@ def main():
                     WHERE username=?
                 """, conn, params=(st.session_state.username,))
                 conn.close()
-                
+
                 if export_format == "CSV":
                     csv = transactions.to_csv(index=False)
                     st.download_button(
@@ -1513,17 +1907,83 @@ def main():
 
         elif page == "Settings":
             st.header("Settings")
+            
+            
+
 
             # User Preferences
             st.subheader("Preferences")
-            currency = st.selectbox("Currency", ["USD", "EUR", "GBP", "JPY", "GHS"], 
-                                index=["USD", "EUR", "GBP", "JPY", "GHS"].index(
-                                    user_settings.settings.get('currency', 'GHS')))
+            # Get current settings first
+            current_currency = user_settings.settings.get('currency', 'GHS')
+            current_theme = user_settings.settings.get('theme', 'light')
             
-            theme = st.selectbox("Theme", ["light", "dark"], 
-                            index=["light", "dark"].index(
-                                user_settings.settings.get('theme', 'light')))
+            currency = st.selectbox("Currency", 
+                          ["USD", "EUR", "GBP", "JPY", "GHS"], 
+                          index=["USD", "EUR", "GBP", "JPY", "GHS"].index(current_currency))
             
+            # Only perform currency conversion if the currency has changed
+            if currency != current_currency:
+                try:
+                    # Convert all amounts in transactions
+                    conn = sqlite3.connect('financial_planner.db')
+                    c = conn.cursor()
+                    transactions = pd.read_sql_query("""
+                        SELECT id, amount FROM transactions WHERE username=?
+                    """, conn, params=(st.session_state.username,))
+                    
+                    for _, row in transactions.iterrows():
+                        new_amount = convert_amount(row['amount'], current_currency, currency)
+                        c.execute("""
+                            UPDATE transactions 
+                            SET amount=? 
+                            WHERE id=?
+                        """, (new_amount, row['id']))
+                    
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Converted all amounts from {current_currency} to {currency}")
+                except Exception as e:
+                    st.error(f"Error converting currency: {e}")
+            
+
+            # Enhanced theme selection
+            theme = st.selectbox("Theme", 
+                                ["light", "dark", "blue", "green", "purple", "pink"],
+                                index=["light", "dark", "blue", "green", "purple", "pink"].index(
+                                    current_theme if current_theme in ["light", "dark", "blue", "green", "purple", "pink"] else "dark"))
+            
+                        # Show theme preview
+            if theme in theme_colors:
+                colors = theme_colors[theme]
+                st.markdown(f"""
+                    <style>
+                        .theme-preview {{
+                            background-color: {colors['background']};
+                            color: {colors['text']};
+                            padding: 1rem;
+                            border-radius: 0.5rem;
+                            margin: 1rem 0;
+                            border: 1px solid {colors['accent']};
+                        }}
+                        
+                        .theme-preview-sidebar {{
+                            background-color: {colors['sidebar_bg']};
+                            color: {colors['sidebar_text']};
+                            padding: 1rem;
+                            border-radius: 0.5rem;
+                            margin: 0.5rem 0;
+                        }}
+                    </style>
+                    <div class="theme-preview">
+                        <h4>Main Content Preview</h4>
+                        <p>This is how your main content will look.</p>
+                    </div>
+                    <div class="theme-preview-sidebar">
+                        <h4>Sidebar Preview</h4>
+                        <p>This is how your sidebar will look.</p>
+                    </div>
+                """, unsafe_allow_html=True)
+
             # Notification Settings
             st.subheader("Notifications")
             notifications = user_settings.settings.get('notifications', {})
@@ -1531,8 +1991,7 @@ def main():
                                         value=notifications.get('email', True))
             bill_reminders = st.checkbox("Bill Reminders", 
                                     value=notifications.get('bill_reminders', True))
-           
-            
+
             if st.button("Save Settings"):
                 try:
                     # Update settings dictionary
@@ -1544,27 +2003,28 @@ def main():
                             'bill_reminders': bill_reminders
                         }
                     })
-                    
-                    # Save settings using a single database connection
-                    conn = sqlite3.connect('financial_planner.db')
-                    try:
-                        c = conn.cursor()
-                        c.execute("""
-                            UPDATE users 
-                            SET settings = ?
-                            WHERE username = ?
-                        """, (json.dumps(user_settings.settings), st.session_state.username))
-                        conn.commit()
-                        st.success("Settings saved successfully!")
-                    except sqlite3.Error as e:
-                        st.error(f"Database error: {e}")
-                        conn.rollback()
-                    finally:
-                        conn.close()
+
+                    # Apply theme immediately
+                    if theme in theme_colors:
+                        st.markdown(f"""
+                            <style>
+                                .stApp {{
+                                    background-color: {theme_colors[theme]['background']};
+                                    color: {theme_colors[theme]['text']};
+                                }}
+                            </style>
+                        """, unsafe_allow_html=True)
+
+                    # Save settings to database
+                    if user_settings.save_settings(user_settings.settings):
+                        st.success("Settings saved successfully! Please refresh the page for all changes to take effect.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Failed to save settings")
                 except Exception as e:
                     st.error(f"Error saving settings: {e}")
 
+
 if __name__ == "__main__":
     main()
-
-            
